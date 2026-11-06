@@ -1,0 +1,41 @@
+# Запуск готового образа без сборки: docker compose -f docker-compose.team.yml up -d
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: planner
+      POSTGRES_USER: planner
+      POSTGRES_PASSWORD: planner
+    volumes:
+      - planner-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planner -d planner"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  planner:
+    image: ghcr.io/malox4/ccc-planner:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Db: "Host=db;Database=planner;Username=planner;Password=planner"
+      Jira__BaseUrl: ${JIRA_BASE_URL:-https://your-company.atlassian.net}
+      Jira__Email: ${JIRA_EMAIL:-}
+      Jira__ProjectKey: ${JIRA_PROJECT_KEY:-DEMO}
+      Jira__ApiToken: ${JIRA_API_TOKEN:-}
+      Jira__Jql: ${JIRA_JQL:-}
+      Jira__SprintJql: ${JIRA_SPRINT_JQL:-}
+      Planner__DefaultCapacityHours: ${DEFAULT_CAPACITY_HOURS:-50}
+      Planner__SupportPercent: ${SUPPORT_PERCENT:-15}
+      Planner__InboxPath: /inbox
+      Planner__InboxHostPath: "${INBOX_HOST_PATH:-папка inbox рядом с docker-compose.yml}"
+    volumes:
+      # сюда кладут файл бизнес-заказчика; разобранные уходят в inbox/processed, проблемные в inbox/failed
+      - ./inbox:/inbox
+    ports:
+      - "${PLANNER_PORT:-8085}:8080"
+
+volumes:
+  planner-db:

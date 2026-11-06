@@ -17,6 +17,19 @@ docker compose up -d --build
 
 Токен Jira Cloud: https://id.atlassian.com/manage-profile/security/api-tokens (достаточно прав на чтение). Токен лежит только в `.env`, в интерфейс и образ не попадает, файл в `.gitignore` и `.dockerignore`.
 
+## Запуск готового образа без сборки (для коллег)
+
+Образ собирается автоматически (GitHub Actions) и лежит в `ghcr.io/malox4/ccc-planner:latest`. В нём нет ни токенов, ни данных вашей компании, только код и демонстрационные данные.
+
+```bash
+curl -O https://raw.githubusercontent.com/malox4/ccc-planner/main/docker-compose.team.yml
+curl -o .env https://raw.githubusercontent.com/malox4/ccc-planner/main/team.env.example
+# впишите в .env адрес Jira, ключ проекта и СВОЙ токен
+docker compose -f docker-compose.team.yml up -d
+```
+
+Откройте http://localhost:8085. Без `.env` сервис стартует на демо-данных. Токен Jira у каждого свой: токен нельзя зашивать в образ или репозиторий, он даёт доступ к Jira под вашим именем.
+
 ## Возможности
 
 | Раздел | Что делает |
