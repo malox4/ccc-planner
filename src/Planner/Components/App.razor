@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="app.css" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+    <title>CCC Planner</title>
+</head>
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <div id="conn-banner" style="display:none;position:fixed;top:48px;left:0;right:0;z-index:10;padding:6px 12px;text-align:center;background:#fffae6;color:#172b4d;border-bottom:1px solid #ff991f;font:13px sans-serif">Соединение с сервером потеряно, переподключаюсь… Данные хранятся в базе, ничего не потеряется.</div>
+    <script src="dnd.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        // Если соединение с сервером оборвалось (перезапуск контейнера, сон ноутбука), сами ждём сервер и перезагружаем страницу.
+        // Данные лежат в PostgreSQL, Jira при этом не вызывается.
+        let waitTimer = null;
+        const banner = () => document.getElementById('conn-banner');
+        Blazor.start({
+            circuit: {
+                reconnectionHandler: {
+                    onConnectionDown: () => {
+                        banner().style.display = 'block';
+                        if (waitTimer) return;
+                        waitTimer = setInterval(async () => {
+                            try {
+                                const r = await fetch('/', { cache: 'no-store' });
+                                if (r.ok) { clearInterval(waitTimer); location.reload(); }
+                            } catch { /* сервер ещё поднимается */ }
+                        }, 2000);
+                    },
+                    onConnectionUp: () => {
+                        banner().style.display = 'none';
+                        if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

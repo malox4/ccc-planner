@@ -1,0 +1,6 @@
+**/bin
+**/obj
+.env
+.git
+inbox/processed/
+inbox/failed/

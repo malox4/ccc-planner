@@ -1,0 +1,15 @@
+<span class="ico ico-@Fmt.TypeClass(Type)" title="@Type">@Glyph</span>
+
+@code {
+    [Parameter, EditorRequired] public string Type { get; set; } = "";
+
+    string Glyph => Fmt.TypeClass(Type) switch
+    {
+        "epic" => "⚡",
+        "init" => "◆",
+        "story" => "▮",
+        "sub" => "▫",
+        "bug" => "●",
+        _ => "✓",
+    };
+}

@@ -1,0 +1,62 @@
+<details class="card side-card" open="@(!Collapsed)">
+    <summary>
+        <h2>@Title</h2>
+        <span class="tot" title="Всего часов / суммарная ёмкость">@Loads.Sum(l => l.Hours).ToString("0") / @Loads.Sum(l => l.Person.CapacityHours).ToString("0") ч</span>
+    </summary>
+    @if (!string.IsNullOrEmpty(Hint))
+    {
+        <p class="hint">@Hint</p>
+    }
+    @foreach (var l in Loads)
+    {
+        var pct = Math.Min(100, l.Ratio * 100);
+        var cls = l.Ratio >= 1 ? "critical" : l.Ratio >= 0.8 ? "warning" : "";
+        <div class="person-row">
+            <div class="person-head">
+                <span class="person-name">@l.Person.Name</span>
+                <span class="person-free @(l.Ratio >= 1 ? "over" : "")">@(l.Ratio >= 1 ? "перегруз" : $"свободно {l.Free:0} ч")</span>
+            </div>
+            <div class="bar"><div class="fill @cls" style="width:@(pct.ToString("0", System.Globalization.CultureInfo.InvariantCulture))%"></div></div>
+            <div class="person-meta">
+                @l.Hours.ToString("0") /
+                <input type="number" class="cap-input" min="0" step="5" value="@l.Person.CapacityHours"
+                       @onchange="e => CapChanged(l.Person.Name, e)" />
+                ч · @l.OpenTasks откр.@if (ShowDone) { <text> · @l.DoneTasks готово</text> }
+                @if (l.NoEstimate > 0)
+                {
+                    <b title="Без часов нагрузка занижена"> · @l.NoEstimate без оценки</b>
+                }
+            </div>
+            @if (l.AnalysisHours > 0 || l.SupportHours > 0 || l.DoneHours > 0 || l.OverheadHours > 0)
+            {
+                <div class="person-meta">в том числе:
+                    @if (l.DoneHours > 0) { <text>закрыто @l.DoneHours.ToString("0") ч · </text> }
+                    @if (l.OverheadHours > 0) { <text>встречи и инциденты @l.OverheadHours.ToString("0") ч · </text> }
+                    @if (l.AnalysisHours > 0) { <text>анализ @l.AnalysisHours.ToString("0") ч · </text> }
+                    @if (l.OutsideHours > 0) { <text>из них вне спринта @l.OutsideHours.ToString("0") ч · </text> }
+                    @if (l.SupportHours > 0) { <text>сопровождение @l.SupportHours.ToString("0") ч</text> }
+                </div>
+            }
+        </div>
+    }
+    @if (Loads.Count == 0)
+    {
+        <p class="hint">Никого нет — добавьте людей на вкладке «Команда».</p>
+    }
+</details>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter, EditorRequired] public List<Load> Loads { get; set; } = [];
+    [Parameter] public bool ShowDone { get; set; }
+    /// <summary>Свёрнута по умолчанию; раскрывается по клику на заголовок.</summary>
+    [Parameter] public bool Collapsed { get; set; }
+    [Parameter] public EventCallback<(string Name, double Hours)> OnCapacity { get; set; }
+
+    async Task CapChanged(string name, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var h))
+            await OnCapacity.InvokeAsync((name, h));
+    }
+}

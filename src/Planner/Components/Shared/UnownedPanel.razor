@@ -1,0 +1,30 @@
+@if (Items.Count > 0)
+{
+    <div class="card side-card">
+        <h2>Работа вне команды</h2>
+        <p class="hint">Задачи текущего спринта без исполнителя или у людей не из списка «Команда». Они в нагрузке спринта, но ни на ком не лежат: назначьте исполнителя в Jira (после синхронизации часы лягут на него).</p>
+        @foreach (var u in Items)
+        {
+            <div class="person-row">
+                <div class="person-head">
+                    <span class="person-name">@u.Who</span>
+                    <span class="person-free over">@u.Hours.ToString("0") ч</span>
+                </div>
+                <div class="person-meta">@u.Open откр. · @u.Done готово</div>
+                <details>
+                    <summary class="hint">Показать задачи (@u.Rows.Count)</summary>
+                    @foreach (var r in u.Rows)
+                    {
+                        <div class="person-meta"><span class="key">@r.Key</span> @Trunc(r.Issue.Summary, 38) · @(r.Hours > 0 ? r.Hours.ToString("0") + " ч" : "без оценки") · @r.Issue.Status</div>
+                    }
+                </details>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<Snapshot.Unowned> Items { get; set; } = [];
+
+    static string Trunc(string s, int n) => s.Length <= n ? s : s[..n] + "…";
+}

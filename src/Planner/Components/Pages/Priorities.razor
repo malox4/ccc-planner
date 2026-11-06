@@ -1,0 +1,130 @@
+@page "/priorities"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject BusinessImport Biz
+@inject IDbContextFactory<PlannerDb> Dbf
+@inject InboxWatcher Inbox
+@inject AppState State
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Приоритеты бизнеса — CCC Planner</PageTitle>
+
+<div class="page-head">
+    <h1>Приоритеты бизнес-владельца</h1>
+    <p class="sub">Загрузите файл со стратегией и приоритетами (Excel или CSV), например строку «Платежи — 1 приоритет». Ключей задач в файле нет, поэтому сервис сам подбирает задачи из беклога по словам темы. Подтверждённые совпадения добавляют баллы к Business Value в WSJF: приоритет 1 — +13, 2 — +8, 3 — +5, 4 — +3, 5 — +1.</p>
+</div>
+
+<div class="card form-card">
+    <h2>Папка для файла заказчика</h2>
+    <p class="hint">Положите файл (xlsx или csv) в папку: <b>@Inbox.HostPath</b>. Сервис сам подхватит его в течение 10 секунд, подберёт задачи и переложит файл в <code>processed</code>. Если файл не разобрался, он уйдёт в <code>failed</code> с пояснением. Новая версия файла с тем же именем заменяет прежнюю, а ваши галочки у совпадений сохраняются. Всё работает локально.</p>
+    <p class="hint @(Inbox.LastFailed ? "err" : "")">
+        @(Inbox.LastMessage ?? "Файлов пока не было.")
+        @if (Inbox.LastScanUtc != null) { <text> · проверено @Inbox.LastScanUtc.Value.ToLocalTime().ToString("HH:mm:ss")</text> }
+    </p>
+    <button class="btn" @onclick="ScanNow">Проверить папку сейчас</button>
+</div>
+
+<div class="card form-card">
+    <h2>Или загрузить файл вручную</h2>
+    <InputFile OnChange="OnFile" accept=".xlsx,.xlsm,.csv,.txt" />
+    @if (info != null) { <p class="hint">@info</p> }
+    <p class="hint">Что распознаётся: строки, где есть «N приоритет», «приоритет N», число 1–9 в отдельной ячейке или слово высокий/средний/низкий (must/should/could). Остальной текст строки считается темой.</p>
+    @if (items.Count > 0)
+    {
+        <button class="btn" @onclick="Rematch">Пересчитать совпадения</button>
+        <button class="btn" @onclick="Clear">Очистить всё</button>
+    }
+</div>
+
+@foreach (var p in items.OrderBy(p => p.Priority).ThenBy(p => p.Theme))
+{
+    var pl = links.Where(l => l.BusinessPriorityId == p.Id).OrderByDescending(l => l.Score).ToList();
+    <div class="card prio-card">
+        <div class="prio-head">
+            <span class="prio-badge p@(p.Priority)">P@(p.Priority)</span>
+            <b>@p.Theme</b>
+            <span class="n">@pl.Count(l => l.Confirmed) из @pl.Count подтверждено</span>
+            <button class="btn" @onclick="() => Delete(p.Id)">Удалить</button>
+        </div>
+        @foreach (var l in pl)
+        {
+            issues.TryGetValue(l.IssueKey, out var i);
+            <label class="match">
+                <input type="checkbox" checked="@l.Confirmed" @onchange="e => Confirm(l.Id, e)" />
+                <span class="key">@l.IssueKey</span>
+                <span>@(i?.Summary ?? "—")</span>
+                <span class="n">совпадение @((l.Score * 100).ToString("0"))%</span>
+            </label>
+        }
+        @if (pl.Count == 0) { <p class="hint">Подходящих задач в беклоге не найдено — проверьте формулировку или добавьте задачу в Jira.</p> }
+    </div>
+}
+
+@if (items.Count == 0)
+{
+    <p class="empty">Файл ещё не загружали.</p>
+}
+
+@code {
+    List<BusinessPriority> items = [];
+    List<BusinessLink> links = [];
+    Dictionary<string, Issue> issues = [];
+    string? info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await Load();
+    }
+
+    void OnChanged() => InvokeAsync(async () => { await Load(); StateHasChanged(); });
+    public void Dispose() => State.Changed -= OnChanged;
+
+    async Task ScanNow()
+    {
+        var n = await Inbox.ScanAsync();
+        if (n == 0) info = "В папке нет новых файлов.";
+        await Load();
+    }
+
+    async Task Load()
+    {
+        await using var db = await Dbf.CreateDbContextAsync();
+        items = await db.BusinessPriorities.AsNoTracking().ToListAsync();
+        links = await db.BusinessLinks.AsNoTracking().ToListAsync();
+        issues = await db.Issues.AsNoTracking().ToDictionaryAsync(i => i.Key);
+    }
+
+    async Task OnFile(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            await using var ms = new MemoryStream();
+            await using (var s = e.File.OpenReadStream(10_000_000)) await s.CopyToAsync(ms);
+            ms.Position = 0;
+            var parsed = Biz.Parse(ms, e.File.Name);
+            if (parsed.Count == 0)
+            {
+                info = "В файле не нашлось строк с приоритетом. Пришлите пример — подстрою разбор.";
+                return;
+            }
+            var n = await Biz.ImportAsync(parsed, e.File.Name);
+            info = $"Загружено тем: {n}. Совпадения подобраны — проверьте галочки ниже.";
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            info = "Не удалось прочитать файл: " + ex.Message;
+        }
+    }
+
+    async Task Confirm(int id, ChangeEventArgs e)
+    {
+        await Biz.SetConfirmedAsync(id, e.Value is true);
+        await Load();
+    }
+
+    async Task Rematch() { await Biz.RematchAsync(); await Load(); }
+    async Task Clear() { await Biz.ClearAsync(); info = null; await Load(); }
+    async Task Delete(int id) { await Biz.DeletePriorityAsync(id); await Load(); }
+}

@@ -1,0 +1,428 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject PlanningService Svc
+@inject AppState State
+@inject IJSRuntime JS
+
+<PageTitle>Планирование — CCC Planner</PageTitle>
+
+<div class="page-head">
+    <h1>Планирование спринта</h1>
+    <p class="sub">Как беклог в Jira: текущий спринт, следующий спринт (пред-спринт) и беклог по WSJF. Аналитик анализирует задачи следующего спринта заранее, поэтому их анализ ложится на его нагрузку сейчас, плюс он сопровождает задачи, которые разработчик уже взял в работу (@((snap?.SupportPercent ?? 15).ToString("0"))% от часов разработки): вопросы, ошибки, уточнения. Пока задача не взята (Ready For Refinement, К выполнению, Ready for Development), аналитика она не загружает. Для задач вроде «получить доступ» или «узнать причину» анализ не нужен.</p>
+</div>
+
+@if (snap == null)
+{
+    <p class="empty">Загрузка…</p>
+}
+else
+{
+    var planned = snap.Rows.Where(r => r.Plan.InSprint && r.Issue.MissingSinceUtc == null && SearchMatches(r)).OrderByDescending(r => r.Wsjf ?? -1).ToList();
+    var backlog = snap.Rows.Where(r => !r.Plan.InSprint && !r.InCurrent && r.Issue.MissingSinceUtc == null
+                                       && r.Issue.StatusCategory != "done" && !Fmt.IsContainerType(r.Issue.Type) && Matches(r))
+                          .OrderByDescending(r => r.Wsjf ?? -1).ThenBy(r => r.Key).ToList();
+    var epics = snap.Rows.Where(r => Fmt.IsContainerType(r.Issue.Type) && r.Issue.MissingSinceUtc == null && r.Issue.StatusCategory != "done").ToList();
+    var loads = snap.PlannedLoad();
+    var nowLoads = snap.CurrentLoad();
+    // в текущем спринте показываем и закрытые задачи (их часы остаются в нагрузке спринта), закрытые — внизу
+    var current = snap.Rows.Where(r => r.InCurrent && r.Issue.MissingSinceUtc == null && SearchMatches(r))
+                           .OrderBy(r => r.Issue.StatusCategory == "done" ? 1 : 0)
+                           .ThenBy(r => r.Issue.ParentKey ?? r.Key).ThenBy(r => r.Key).ToList();
+    var currentOpen = current.Count(r => r.Issue.StatusCategory != "done");
+    var currentDone = current.Count - currentOpen;
+
+    <div class="layout">
+        <div class="main">
+            <div class="toolbar">
+                <input class="search" placeholder="Поиск по ключу или названию" @bind="search" @bind:event="oninput" />
+                <select @bind="typeFilter">
+                    <option value="all">Все типы</option>
+                    <option value="task">Задачи</option>
+                    <option value="story">Story</option>
+                    <option value="bug">Problem</option>
+                </select>
+                <label class="check"><input type="checkbox" @bind="onlyReady" /> Только готовые к спринту</label>
+                <label class="check"><input type="checkbox" @bind="onlyScored" /> Только с оценкой</label>
+            </div>
+
+            @if (message != null)
+            {
+                <div class="banner warn">@message <button class="link" @onclick="() => message = null">закрыть</button></div>
+            }
+
+            @if (selected.Count > 0)
+            {
+                <div class="bulkbar">
+                    <b>Выбрано: @selected.Count</b>
+                    <button class="btn primary" @onclick="() => BulkNext(true)">В следующий спринт</button>
+                    <button class="btn" @onclick="() => BulkNext(false)">Вернуть в беклог</button>
+                    <button class="btn" @onclick="() => Promote(selected.ToList())">В текущий (проверка DoR)</button>
+                    <button class="link" @onclick="() => selected.Clear()">снять выделение</button>
+                </div>
+            }
+
+            @{ var waiting = snap.Rows.Where(r => r.WaitsForDeveloper && r.Issue.MissingSinceUtc == null && r.Issue.StatusCategory != "done").ToList(); }
+            @if (waiting.Count > 0)
+            {
+                <div class="banner warn">Ждут разработчика: @waiting.Count задач (@Fmt.Hours(waiting.Sum(r => r.Hours)) разработки). Анализ готов, исполнитель в Jira — аналитик. Назначьте разработчика в Jira или в карточке, и часы лягут на него.</div>
+            }
+
+            <div class="group-title">Текущий спринт <span class="n">@currentOpen открытых · @currentDone готово · @Fmt.Hours(current.Sum(r => r.Hours))</span></div>
+            <div class="list dropzone" data-zone="current">
+                @foreach (var r in current) { @RowView(r, false, true) }
+                @if (current.Count == 0) { <div class="empty-row">Пусто. Перетащите сюда готовые задачи из следующего спринта или нажмите «Перевести готовые в текущий».</div> }
+            </div>
+
+            <div class="group-title">Следующий спринт (пред-спринт) <span class="n">@planned.Count · разработка @Fmt.Hours(planned.Sum(r => r.Hours)) · анализ @Fmt.Hours(planned.Sum(r => r.AnalysisHours))</span>
+                <button class="btn" @onclick="() => Promote(null)" title="Задачи, где есть описание или вложение, аналитик, разработчик, оценка и хватает ёмкости, станут текущими; остальные останутся здесь">Перевести готовые в текущий</button>
+            </div>
+            <div class="list dropzone" data-zone="next">
+                @foreach (var r in planned) { @RowView(r, true) }
+                @if (planned.Count == 0) { <div class="empty-row">Пока пусто — нажмите «В спринт» у задачи или перетащите её сюда из беклога.</div> }
+            </div>
+
+            <div class="group-title">Беклог <span class="n">@backlog.Count</span>
+                <button class="link" @onclick="() => SelectAll(backlog)">выбрать все</button>
+            </div>
+            <div class="list dropzone" data-zone="backlog">
+                @foreach (var r in backlog) { @RowView(r, false) }
+                @if (backlog.Count == 0) { <div class="empty-row">Ничего не найдено.</div> }
+            </div>
+
+            <details class="epics">
+                <summary>Эпики и инициативы (@epics.Count) — WSJF для них не считается, их надо разбить на истории</summary>
+                @foreach (var e in epics)
+                {
+                    <div class="epic-row"><IssueIcon Type="@e.Issue.Type" /><span class="key">@e.Key</span><span>@e.Issue.Summary</span></div>
+                }
+            </details>
+        </div>
+
+        <aside class="side">
+            <WorkloadPanel Title="Разработчики — текущий спринт" ShowDone="true"
+                           Hint="Часы всех задач текущего спринта Jira по исполнителю, включая закрытые и в статусе Backlog."
+                           Loads="@(nowLoads.Where(l => l.Person.Role == "dev").ToList())" OnCapacity="OnCapacity" />
+            <WorkloadPanel Title="Разработчики — следующий спринт" Collapsed="true" Hint="Часы разработки задач с галочкой «В спринт». Меньше загружены — выше."
+                           Loads="@(loads.Where(l => l.Person.Role == "dev").ToList())" OnCapacity="OnCapacity" />
+            <WorkloadPanel Title="Аналитики — сейчас" Hint="Свои задачи в текущем спринте + анализ пред-спринта + сопровождение задач в работе. Ёмкость у каждого своя."
+                           Loads="@(nowLoads.Where(l => l.Person.Role == "analyst").ToList())" OnCapacity="OnCapacity" />
+            <UnownedPanel Items="@snap.CurrentUnowned()" />
+        </aside>
+    </div>
+}
+
+@code {
+    Snapshot? snap;
+    string search = "";
+    string typeFilter = "all";
+    bool onlyReady;
+    bool onlyScored;
+    string? message;
+    readonly HashSet<string> expanded = [];
+    static readonly int[] Scale = [1, 2, 3, 5, 8, 13];
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await Reload();
+    }
+
+    async Task Reload() => snap = await Svc.LoadAsync();
+
+    void OnChanged() => InvokeAsync(async () => { await Reload(); StateHasChanged(); });
+
+    // поиск и тип действуют на все списки; «только готовые» и «только с оценкой» — только на беклог
+    bool SearchMatches(Row r)
+    {
+        if (typeFilter != "all" && Fmt.TypeClass(r.Issue.Type) != typeFilter) return false;
+        if (!string.IsNullOrWhiteSpace(search) &&
+            !r.Key.Contains(search, StringComparison.OrdinalIgnoreCase) &&
+            !r.Issue.Summary.Contains(search, StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    bool Matches(Row r)
+    {
+        if (onlyReady && !r.Readiness.CanTake) return false;
+        if (onlyScored && r.Wsjf == null) return false;
+        if (typeFilter != "all" && Fmt.TypeClass(r.Issue.Type) != typeFilter) return false;
+        if (!string.IsNullOrWhiteSpace(search) &&
+            !r.Key.Contains(search, StringComparison.OrdinalIgnoreCase) &&
+            !r.Issue.Summary.Contains(search, StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    readonly HashSet<string> selected = [];
+
+    void ToggleSelect(string key, ChangeEventArgs e)
+    {
+        if (e.Value is true) selected.Add(key); else selected.Remove(key);
+    }
+
+    void SelectAll(IEnumerable<Row> rows)
+    {
+        foreach (var r in rows) selected.Add(r.Key);
+    }
+
+    DotNetObjectReference<Planning>? self;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            self = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("cccDnD.init", self);
+        }
+    }
+
+    /// <summary>Вызывается из dnd.js, когда задачи (или выбранную группу) бросили в один из блоков.</summary>
+    [JSInvokable]
+    public Task DropKeys(string zone, string[] keys) => InvokeAsync(async () =>
+    {
+        var list = keys.ToList();
+        if (list.Count == 0) return;
+        if (zone == "next")
+        {
+            // задачи, переведённые в текущий спринт здесь, возвращаем обратно; остальные кладём в следующий
+            var back = snap!.Rows.Where(r => list.Contains(r.Key) && r.Plan.InCurrent && !r.Issue.InJiraSprint).Select(r => r.Key).ToList();
+            foreach (var k in back) await Svc.ReturnToNextAsync(k);
+            message = await Svc.SetManyInSprintAsync(list.Except(back), true);
+        }
+        else if (zone == "backlog") message = await Svc.SetManyInSprintAsync(list, false);
+        else if (zone == "current")
+        {
+            await Svc.SetManyInSprintAsync(list, true); // сначала в следующий, затем проверка DoR и ёмкости
+            await Promote(list);
+            return;
+        }
+        selected.Clear();
+        await Reload();
+        StateHasChanged();
+    });
+
+    async Task BulkNext(bool on)
+    {
+        message = await Svc.SetManyInSprintAsync(selected.ToList(), on);
+        selected.Clear();
+        await Reload();
+    }
+
+    async Task Promote(List<string>? keys)
+    {
+        var rep = await Svc.PromoteAsync(keys);
+        message = rep.Moved.Count == 0 && rep.Stayed.Count == 0
+            ? "В следующем спринте нет задач для перевода."
+            : $"Переведено в текущий спринт: {rep.Moved.Count}." +
+              (rep.Stayed.Count > 0
+                  ? " Остались в следующем: " + string.Join("; ", rep.Stayed.Take(8).Select(s => $"{s.Key} — {s.Why}")) + (rep.Stayed.Count > 8 ? $" и ещё {rep.Stayed.Count - 8}" : "") + "."
+                  : "");
+        selected.Clear();
+        await Reload();
+    }
+
+    async Task ReturnNext(string key)
+    {
+        await Svc.ReturnToNextAsync(key);
+        await Reload();
+    }
+
+    async Task Take(string key, bool on)
+    {
+        message = await Svc.SetInSprintAsync(key, on);
+        await Reload();
+    }
+
+    async Task OnCapacity((string Name, double Hours) c)
+    {
+        await Svc.SetCapacityAsync(c.Name, c.Hours);
+        await Reload();
+    }
+
+    void Toggle(string key) { if (!expanded.Remove(key)) expanded.Add(key); }
+
+    async Task Edit(string key, Action<Plan> change)
+    {
+        await Svc.UpdatePlanAsync(key, change);
+        await Reload();
+    }
+
+    static int? ParseInt(object? v) => int.TryParse(v?.ToString(), out var n) ? n : null;
+    static double? ParseDouble(object? v) =>
+        double.TryParse(v?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var n) && n > 0 ? n : null;
+
+    Task OnScale(string key, string field, ChangeEventArgs e)
+    {
+        var n = ParseInt(e.Value);
+        return Edit(key, p =>
+        {
+            if (field == "bv") p.Bv = n; else if (field == "tc") p.Tc = n; else p.Rr = n;
+        });
+    }
+
+    Task OnPerson(string key, bool analyst, ChangeEventArgs e)
+    {
+        var v = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString();
+        return Edit(key, p => { if (analyst) p.Analyst = v; else p.Developer = v; });
+    }
+
+    Task OnHours(string key, ChangeEventArgs e)
+    {
+        var h = ParseDouble(e.Value);
+        return Edit(key, p => { p.ManualHours = h; p.NeedsReestimate = false; });
+    }
+
+    Task OnIntegrators(string key, ChangeEventArgs e) => Edit(key, p => p.ForIntegrators = e.Value is true);
+
+    Task OnWaiting(string key, ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString()?.Trim();
+        return Edit(key, p => p.WaitingOn = string.IsNullOrEmpty(v) ? null : v);
+    }
+
+    Task OnAnalysisHours(string key, ChangeEventArgs e)
+    {
+        var h = ParseDouble(e.Value);
+        return Edit(key, p => p.ManualAnalysisHours = h);
+    }
+
+    Task ReestimateDone(string key) => Edit(key, p => p.NeedsReestimate = false);
+
+    Task OnTri(string key, bool notNeeded, ChangeEventArgs e)
+    {
+        var s = e.Value?.ToString();
+        bool? v = notNeeded ? (s == "skip" ? true : s == "need" ? false : null) : (s == "yes" ? true : s == "no" ? false : null);
+        return Edit(key, p => { if (notNeeded) p.AnalysisNotNeeded = v; else p.AnalysisDone = v; });
+    }
+
+    string Tri(bool? v, bool notNeeded) => notNeeded ? (v == true ? "skip" : v == false ? "need" : "auto") : (v == true ? "yes" : v == false ? "no" : "auto");
+
+    public void Dispose()
+    {
+        State.Changed -= OnChanged;
+        self?.Dispose();
+    }
+
+    RenderFragment RowView(Row r, bool isPlanned, bool isCurrent = false) => @<div class="item @(expanded.Contains(r.Key) ? "open" : "") @(r.Issue.StatusCategory == "done" ? "done" : "")">
+        <div class="item-row" data-drag="@(r.Issue.StatusCategory == "done" || r.Issue.InJiraSprint ? "false" : "true")" @onclick="() => Toggle(r.Key)">
+            <input type="checkbox" class="sel" checked="@selected.Contains(r.Key)" @onclick:stopPropagation @onchange="e => ToggleSelect(r.Key, e)" />
+            <IssueIcon Type="@r.Issue.Type" />
+            <span class="key">@r.Key</span>
+            <span class="summary">@r.Issue.Summary</span>
+            @if (r.Issue.ParentSummary != null) { <span class="chip epic" title="@r.Issue.ParentSummary">@Trunc(r.Issue.ParentSummary, 22)</span> }
+            @if (r.BusinessPriority != null) { <span class="chip biz" title="@r.BusinessTheme">Бизнес P@(r.BusinessPriority)</span> }
+            @if (!string.IsNullOrWhiteSpace(r.Plan.WaitingOn)) { <span class="chip biz" title="Ждём внешнюю сторону: после ответа придёт основная работа (маппинг, методы, логика, созвоны), часы под неё зарезервированы">ждём: @r.Plan.WaitingOn</span> }
+            @if (r.WaitsForDeveloper) { <span class="chip biz" title="Анализ готов, аналитик ведёт задачу, разработчика ещё нужно назначить">нужен разработчик</span> }
+            @if (r.IsAnalytical) { <span class="chip ok" title="Исполнитель в Jira — аналитик: задача на уточнение/анализ, не для разработки">аналитика</span> }
+            else if (r.Readiness.NoAnalysisNeeded) { <span class="chip ok" title="Анализ не нужен — можно брать без аналитика">без анализа</span> }
+            @if (r.AnalysisHours > 0 && (!isCurrent || Rules.AnalysisPendingStatus(r.Issue.Status))) { <span class="chip biz" title="Описание есть, критериев приёмки нет: задачу можно брать, но аналитик напишет критерии — его часы учитываются">анализ @Fmt.Hours(r.AnalysisHours)</span> }
+            @if (r.Plan.NeedsReestimate) { <span class="chip biz" title="В Jira появились критерии приёмки — пересмотрите часы разработки">пересмотреть оценку</span> }
+            @if (isPlanned && r.PromoteProblems.Count > 0) { <span class="chip biz" title="Чтобы перевести в текущий спринт: @string.Join(", ", r.PromoteProblems)">не готово к текущему: @r.PromoteProblems.Count</span> }
+            @if (r.Plan.InCurrent && !r.Issue.InJiraSprint) { <span class="chip ok" title="Переведена в текущий спринт в сервисе; Jira отразит это после того, как вы добавите задачу в спринт">переведена здесь</span> }
+            @if (r.Readiness.CanTake) { <span class="ready ok" title="Можно брать в спринт">✔</span> }
+            else { <span class="ready bad" title="@string.Join(" ", r.Readiness.Problems)">⚠</span> }
+            <span class="hours" title="@(r.Plan.EstBasis ?? "Оценки нет")">@Fmt.Hours(r.Hours)</span>
+            <span class="wsjf @(r.Wsjf == null ? "empty" : "")" title="WSJF">@(r.Wsjf == null ? "–" : r.Wsjf.Value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))</span>
+            <span class="avatar" title="@(r.Plan.Developer ?? "Разработчик не назначен")">@Fmt.Initials(r.Plan.Developer)</span>
+            @if (isCurrent)
+            {
+                <span class="lozenge" title="@(r.Issue.Assignee ?? "Исполнитель в Jira не назначен")">@r.Issue.Status</span>
+                @if (r.Plan.InCurrent && !r.Issue.InJiraSprint)
+                {
+                    <button class="btn" @onclick:stopPropagation @onclick="() => ReturnNext(r.Key)">Вернуть в следующий</button>
+                }
+            }
+            else if (isPlanned)
+            {
+                <button class="btn" @onclick:stopPropagation @onclick="() => Take(r.Key, false)">Убрать</button>
+            }
+            else
+            {
+                <button class="btn @(r.Readiness.CanTake ? "primary" : "")" @onclick:stopPropagation @onclick="() => Take(r.Key, true)">В спринт</button>
+            }
+        </div>
+        @if (expanded.Contains(r.Key))
+        {
+            <div class="detail">
+                <div class="fields">
+                    <label>Аналитик
+                        <select @onchange='e => OnPerson(r.Key, true, e)'>
+                            <option value="">—</option>
+                            @foreach (var p in snap!.People.Where(p => p.Role == "analyst")) { <option value="@p.Name" selected="@(r.Plan.Analyst == p.Name)">@p.Name</option> }
+                        </select>
+                    </label>
+                    <label>Разработчик
+                        <select @onchange='e => OnPerson(r.Key, false, e)'>
+                            <option value="">—</option>
+                            @foreach (var p in snap!.People) { <option value="@p.Name" selected="@(r.Plan.Developer == p.Name)">@p.Name</option> }
+                        </select>
+                    </label>
+                    <label>Часы разработки
+                        <input type="number" min="1" step="1" value="@r.Plan.ManualHours" placeholder="@(r.Plan.EstLikely?.ToString("0") ?? "ч")" @onchange='e => OnHours(r.Key, e)' />
+                    </label>
+                    <label>Часы анализа
+                        <input type="number" min="1" step="1" value="@r.Plan.ManualAnalysisHours" placeholder="@(r.AnalysisHours > 0 ? r.AnalysisHours.ToString("0") : "ч")" @onchange='e => OnAnalysisHours(r.Key, e)' />
+                    </label>
+                    <label>Ждём ответа от
+                        <input type="text" value="@r.Plan.WaitingOn" placeholder="например, партнёр" @onchange='e => OnWaiting(r.Key, e)' />
+                    </label>
+                    <label class="check"><input type="checkbox" checked="@r.Plan.ForIntegrators" @onchange='e => OnIntegrators(r.Key, e)' /> Для команды интеграторов</label>
+                    <label>Business Value
+                        <select @onchange='e => OnScale(r.Key, "bv", e)'><option value="">—</option>@foreach (var n in Scale) { <option value="@n" selected="@(r.Plan.Bv == n)">@n</option> }</select>
+                    </label>
+                    <label>Time Criticality
+                        <select @onchange='e => OnScale(r.Key, "tc", e)'><option value="">—</option>@foreach (var n in Scale) { <option value="@n" selected="@(r.Plan.Tc == n)">@n</option> }</select>
+                    </label>
+                    <label>Risk Reduction
+                        <select @onchange='e => OnScale(r.Key, "rr", e)'><option value="">—</option>@foreach (var n in Scale) { <option value="@n" selected="@(r.Plan.Rr == n)">@n</option> }</select>
+                    </label>
+                    <label>Анализ нужен?
+                        <select @onchange='e => OnTri(r.Key, true, e)'>
+                            <option value="auto" selected="@(Tri(r.Plan.AnalysisNotNeeded, true) == "auto")">Авто (@(Rules.SuggestsNoAnalysis(r.Issue.Summary) ? "не нужен" : "нужен"))</option>
+                            <option value="need" selected="@(Tri(r.Plan.AnalysisNotNeeded, true) == "need")">Нужен</option>
+                            <option value="skip" selected="@(Tri(r.Plan.AnalysisNotNeeded, true) == "skip")">Не нужен</option>
+                        </select>
+                    </label>
+                    <label>Анализ сделан?
+                        <select @onchange='e => OnTri(r.Key, false, e)'>
+                            <option value="auto" selected="@(Tri(r.Plan.AnalysisDone, false) == "auto")">Авто (@(r.Readiness.AnalysisComplete ? "да" : "нет"))</option>
+                            <option value="yes" selected="@(Tri(r.Plan.AnalysisDone, false) == "yes")">Да</option>
+                            <option value="no" selected="@(Tri(r.Plan.AnalysisDone, false) == "no")">Нет</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="facts">
+                    <span class="fact @(r.Issue.HasDescription == true ? "ok" : "bad")">Описание: @(r.Issue.HasDescription == null ? "нет данных" : r.Issue.HasDescription == true ? "есть" : "нет")</span>
+                    <span class="fact @(r.Issue.HasAcceptanceCriteria == true ? "ok" : "bad")">Критерии приёмки: @(r.Issue.HasAcceptanceCriteria == null ? "нет данных" : r.Issue.HasAcceptanceCriteria == true ? "есть" : "нет")</span>
+                    <span class="fact @(r.Issue.AttachmentCount > 0 ? "ok" : "")">Вложений: @r.Issue.AttachmentCount</span>
+                    <span class="fact">Job Size: @(r.JobSize == 0 ? "–" : r.JobSize.ToString())</span>
+                    @if (r.AnalysisHours > 0) { <span class="fact">Анализ: @Fmt.Hours(r.AnalysisHours)</span> }
+                    @if (r.Plan.EstMin != null) { <span class="fact">Вилка: @r.Plan.EstMin–@r.Plan.EstMax ч</span> }
+                </div>
+                @if (r.Plan.NeedsReestimate)
+                {
+                    <div class="banner warn">В Jira появились критерии приёмки. Анализ закрыт (часы аналитика сняты), а часы разработки пересмотрите.
+                        <button class="btn" @onclick="() => ReestimateDone(r.Key)">Оценка актуальна</button></div>
+                }
+                @if (!r.Readiness.CanTake)
+                {
+                    <ul class="problems">@foreach (var p in r.Readiness.Problems) { <li>@p</li> }</ul>
+                }
+                @if (r.AnalysisHours > 0 || r.IsAnalytical)
+                {
+                    <p class="basis"><b>Оценка анализа (модель, можно перебить вручную):</b> @string.Join("; ", r.AnalysisParts). Сопровождение в работе: @r.SupportPct.ToString("0")% от часов разработки.</p>
+                }
+                @if (!string.IsNullOrEmpty(r.Plan.EstBasis))
+                {
+                    <p class="basis"><b>Основание оценки:</b> @r.Plan.EstBasis</p>
+                }
+                @if (!string.IsNullOrEmpty(r.Issue.Description))
+                {
+                    <details><summary>Описание из Jira</summary><pre class="desc">@r.Issue.Description</pre></details>
+                }
+            </div>
+        }
+    </div>;
+
+    static string Trunc(string s, int n) => s.Length <= n ? s : s[..n] + "…";
+}

@@ -1,0 +1,82 @@
+@page "/people"
+@rendermode InteractiveServer
+@inject PlanningService Svc
+
+<PageTitle>Команда — CCC Planner</PageTitle>
+
+<div class="page-head">
+    <h1>Команда и ёмкость</h1>
+    <p class="sub">Ёмкость задаётся в часах на спринт отдельно для каждого человека. По умолчанию — 50 ч; у человека, занятого на проекте частично (например, PO на 50%), — меньше. «Встречи и инциденты» — часы спринта вне задач Jira (митинги, инциденты, root cause, бизнес-вопросы); они вычитаются из ёмкости. Закрытые в спринте задачи остаются в нагрузке.</p>
+</div>
+
+@if (people == null)
+{
+    <p class="empty">Загрузка…</p>
+}
+else
+{
+    <div class="card table-card">
+        <table class="tbl">
+            <thead><tr><th>Имя</th><th>Роль</th><th>Часов на спринт</th><th title="Встречи, инциденты, root cause, бизнес-вопросы вне задач Jira">Встречи и инциденты, ч</th><th></th></tr></thead>
+            <tbody>
+            @foreach (var p in people)
+            {
+                <tr>
+                    <td>@p.Name</td>
+                    <td>@(p.Role == "analyst" ? "Аналитик" : "Разработчик")</td>
+                    <td><input type="number" class="cap-input wide" min="0" step="5" value="@p.CapacityHours" @onchange="e => SetCap(p.Name, e)" /></td>
+                    <td><input type="number" class="cap-input wide" min="0" step="1" value="@p.OverheadHours" @onchange="e => SetOverhead(p.Name, e)" /></td>
+                    <td><button class="btn" @onclick="() => Remove(p.Name)">Удалить</button></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card form-card">
+        <h2>Добавить человека</h2>
+        <div class="fields">
+            <label>Имя (как в Jira)<input @bind="newName" /></label>
+            <label>Роль
+                <select @bind="newRole"><option value="dev">Разработчик</option><option value="analyst">Аналитик</option></select>
+            </label>
+            <label>Часов на спринт<input type="number" min="0" step="5" @bind="newHours" /></label>
+            <button class="btn primary" @onclick="Add">Добавить</button>
+        </div>
+        <p class="hint">Имя должно совпадать с displayName в Jira — иначе задачи текущего спринта не привяжутся к человеку.</p>
+    </div>
+}
+
+@code {
+    List<Person>? people;
+    string newName = "";
+    string newRole = "dev";
+    double newHours = 50;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    async Task Load() => people = (await Svc.LoadAsync()).People;
+
+    async Task SetCap(string name, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var h))
+            await Svc.SetCapacityAsync(name, h);
+        await Load();
+    }
+
+    async Task SetOverhead(string name, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var h))
+            await Svc.SetOverheadAsync(name, h);
+        await Load();
+    }
+
+    async Task Remove(string name) { await Svc.RemovePersonAsync(name); await Load(); }
+
+    async Task Add()
+    {
+        await Svc.AddPersonAsync(newName, newRole, newHours);
+        newName = "";
+        await Load();
+    }
+}

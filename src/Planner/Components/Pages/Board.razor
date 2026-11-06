@@ -1,0 +1,119 @@
+@page "/board"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject PlanningService Svc
+@inject AppState State
+
+<PageTitle>Доска — CCC Planner</PageTitle>
+
+<div class="page-head">
+    <h1>Текущий спринт</h1>
+    <p class="sub">Статусы берутся из Jira при нажатии «Синхронизировать». Если задача пропала из Jira, она считается закрытой и остаётся в колонке «Закрыто — нет в Jira», а не исчезает из сервиса.</p>
+</div>
+
+@if (snap == null)
+{
+    <p class="empty">Загрузка…</p>
+}
+else
+{
+    var sprint = snap.Rows.Where(r => r.InCurrent).ToList();
+    var people = sprint.Select(r => r.Issue.Assignee).Where(a => a != null).Distinct().OrderBy(a => a).ToList();
+    var shown = sprint.Where(r => assignee == null || (assignee == "" ? r.Issue.Assignee == null : r.Issue.Assignee == assignee)).ToList();
+    var loads = snap.CurrentLoad();
+
+    <div class="layout">
+        <div class="main">
+            <div class="quick">
+                <button class="qf @(assignee == null ? "on" : "")" @onclick="() => assignee = null">Все (@sprint.Count)</button>
+                @foreach (var p in people)
+                {
+                    <button class="qf avatar-btn @(assignee == p ? "on" : "")" title="@p" @onclick="() => assignee = p">@Fmt.Initials(p)</button>
+                }
+                <button class="qf @(assignee == "" ? "on" : "")" @onclick='() => assignee = ""'>Не назначено</button>
+            </div>
+
+            <div class="board">
+                @foreach (var col in Columns)
+                {
+                    var cards = shown.Where(r => ColumnOf(r) == col).OrderBy(r => r.Key).ToList();
+                    <section class="col @(col == ClosedCol ? "closed" : "")">
+                        <h3>@col <span class="n">@cards.Count</span></h3>
+                        @foreach (var r in cards)
+                        {
+                            <article class="card-issue @(r.Issue.MissingSinceUtc != null ? "gone" : "")">
+                                <div class="ci-title">@r.Issue.Summary</div>
+                                @if (r.Issue.ParentSummary != null) { <span class="chip epic" title="@r.Issue.ParentSummary">@Trunc(r.Issue.ParentSummary, 26)</span> }
+                                <div class="ci-foot">
+                                    <IssueIcon Type="@r.Issue.Type" />
+                                    <span class="key">@r.Key</span>
+                                    <span class="lozenge">@(r.Issue.MissingSinceUtc != null ? r.Issue.LastKnownStatus : r.Issue.Status)</span>
+                                    <span class="hours">@Fmt.Hours(r.Hours)</span>
+                                    <span class="avatar" title="@(r.Issue.Assignee ?? "Не назначено")">@Fmt.Initials(r.Issue.Assignee)</span>
+                                </div>
+                                @if (r.Issue.MissingSinceUtc != null)
+                                {
+                                    <div class="gone-note">Пропала из Jira @Fmt.Day(r.Issue.MissingSinceUtc.Value) — считаем закрытой</div>
+                                }
+                            </article>
+                        }
+                    </section>
+                }
+            </div>
+        </div>
+
+        <aside class="side">
+            <WorkloadPanel Title="Разработчики" ShowDone="true"
+                           Hint="Часы открытых задач спринта Jira (кроме Готово) по исполнителю. Меньше загружены — выше."
+                           Loads="@(loads.Where(l => l.Person.Role == "dev").ToList())" OnCapacity="OnCapacity" />
+            <WorkloadPanel Title="Аналитики" ShowDone="true"
+                           Hint="Свои задачи + анализ пред-спринта + сопровождение задач, взятых разработчиком в работу (% от часов разработки). У сторис с подзадачами считаются подзадачи."
+                           Loads="@(loads.Where(l => l.Person.Role == "analyst").ToList())" OnCapacity="OnCapacity" />
+            <UnownedPanel Items="@snap.CurrentUnowned()" />
+        </aside>
+    </div>
+}
+
+@code {
+    Snapshot? snap;
+    string? assignee; // null — все, "" — не назначено
+    const string ClosedCol = "Закрыто — нет в Jira";
+
+    static readonly string[] Columns =
+        ["К выполнению", "Анализ", "Готово к разработке", "В работе", "Тестирование", "Готово", ClosedCol];
+
+    static readonly Dictionary<string, string> ByStatus = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Backlog"] = "К выполнению", ["К выполнению"] = "К выполнению", ["To Do"] = "К выполнению",
+        ["Ready for Tech Analysis"] = "Анализ", ["Analysis - Hold"] = "Анализ",
+        ["Ready for Development"] = "Готово к разработке", ["Ready for Devbox"] = "Готово к разработке",
+        ["В работе"] = "В работе", ["In Progress"] = "В работе",
+        ["Тестирование"] = "Тестирование", ["Ready For Testing"] = "Тестирование", ["В процессе проверки"] = "Тестирование",
+        ["Готово"] = "Готово", ["Done"] = "Готово",
+    };
+
+    static string ColumnOf(Row r)
+    {
+        if (r.Issue.MissingSinceUtc != null) return ClosedCol;
+        if (ByStatus.TryGetValue(r.Issue.Status, out var c)) return c;
+        return r.Issue.StatusCategory switch { "done" => "Готово", "indeterminate" => "В работе", _ => "К выполнению" };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        snap = await Svc.LoadAsync();
+    }
+
+    void OnChanged() => InvokeAsync(async () => { snap = await Svc.LoadAsync(); StateHasChanged(); });
+
+    async Task OnCapacity((string Name, double Hours) c)
+    {
+        await Svc.SetCapacityAsync(c.Name, c.Hours);
+        snap = await Svc.LoadAsync();
+    }
+
+    static string Trunc(string s, int n) => s.Length <= n ? s : s[..n] + "…";
+
+    public void Dispose() => State.Changed -= OnChanged;
+}

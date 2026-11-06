@@ -1,0 +1,58 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject SyncService Sync
+@inject AppState State
+@inject IDbContextFactory<PlannerDb> Dbf
+@using Microsoft.EntityFrameworkCore
+
+<header class="topbar">
+    <div class="brand"><span class="logo">◆</span> CCC Planner</div>
+    <nav class="nav">
+        <NavLink href="" Match="NavLinkMatch.All">Планирование</NavLink>
+        <NavLink href="board">Доска</NavLink>
+        <NavLink href="priorities">Приоритеты бизнеса</NavLink>
+        <NavLink href="people">Команда</NavLink>
+    </nav>
+    <div class="sync">
+        <span class="sync-info @(State.LastRun?.Error != null ? "err" : "")" title="@SyncTitle">@SyncText</span>
+        <button class="btn primary" @onclick="DoSync" disabled="@State.Syncing">
+            @(State.Syncing ? "Синхронизация…" : "⟳ Синхронизировать")
+        </button>
+    </div>
+</header>
+
+<main class="page">
+    @Body
+</main>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        if (State.LastRun == null)
+        {
+            await using var db = await Dbf.CreateDbContextAsync();
+            var last = await db.SyncRuns.OrderByDescending(r => r.Id).FirstOrDefaultAsync();
+            if (last != null) State.SetLastRun(last);
+        }
+    }
+
+    void OnChanged() => InvokeAsync(StateHasChanged);
+
+    async Task DoSync() => await Sync.RunAsync();
+
+    string SyncText
+    {
+        get
+        {
+            var r = State.LastRun;
+            if (r == null) return "Синхронизации ещё не было — показаны начальные данные";
+            if (r.Error != null) return "Ошибка синхронизации: " + (r.Error.Length > 70 ? r.Error[..70] + "…" : r.Error);
+            return $"Обновлено {Fmt.Stamp(r.FinishedUtc ?? r.StartedUtc)}: +{r.Added} новых, {r.Updated} обновлено, {r.Disappeared} закрылось";
+        }
+    }
+
+    string SyncTitle => State.LastRun?.Error ?? "";
+
+    public void Dispose() => State.Changed -= OnChanged;
+}
