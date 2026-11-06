@@ -162,3 +162,5 @@ input:focus,select:focus{outline:2px solid var(--blue);outline-offset:-1px}
 .drag-ghost{position:fixed;z-index:1000;pointer-events:none;background:var(--blue);color:#fff;border-radius:3px;padding:4px 10px;font:600 12px var(--sans);box-shadow:0 4px 12px rgba(9,30,66,.35)}
 body.dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
 .item-row[data-drag="true"]{cursor:grab}
+.btn.export{text-decoration:none;display:inline-flex;align-items:center;background:transparent;color:#fff;border-color:rgba(255,255,255,.5)}
+.btn.export:hover{background:rgba(255,255,255,.12)}

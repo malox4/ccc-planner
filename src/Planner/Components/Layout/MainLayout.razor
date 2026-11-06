@@ -15,6 +15,7 @@
     </nav>
     <div class="sync">
         <span class="sync-info @(State.LastRun?.Error != null ? "err" : "")" title="@SyncTitle">@SyncText</span>
+        <a class="btn export" href="export/xlsx" data-enhance-nav="false" download title="Все задачи, нагрузка людей, команда и приоритеты бизнеса одним файлом">⬇ Excel</a>
         <button class="btn primary" @onclick="DoSync" disabled="@State.Syncing">
             @(State.Syncing ? "Синхронизация…" : "⟳ Синхронизировать")
         </button>

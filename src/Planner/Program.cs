@@ -16,6 +16,7 @@ builder.Services.AddSingleton<AppState>();
 builder.Services.AddScoped<SyncService>();
 builder.Services.AddScoped<PlanningService>();
 builder.Services.AddScoped<BusinessImport>();
+builder.Services.AddScoped<ExportService>();
 builder.Services.AddSingleton<InboxWatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<InboxWatcher>());
 
@@ -33,5 +34,13 @@ await Seeder.InitAsync(app.Services);
 app.UseStaticFiles();
 app.UseAntiforgery();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
+
+// Выгрузка всего планирования в Excel
+app.MapGet("/export/xlsx", async (ExportService export) =>
+{
+    var bytes = await export.BuildAsync();
+    return Results.File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        $"ccc-planner-{DateTime.Now:yyyyMMdd-HHmm}.xlsx");
+});
 
 app.Run();
