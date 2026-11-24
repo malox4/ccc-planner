@@ -23,6 +23,7 @@ services:
       ConnectionStrings__Db: "Host=db;Database=planner;Username=planner;Password=planner"
       Jira__BaseUrl: ${JIRA_BASE_URL:-https://your-company.atlassian.net}
       Jira__Email: ${JIRA_EMAIL:-}
+      Jira__BoardUrl: ${JIRA_BOARD_URL:-}
       Jira__ProjectKey: ${JIRA_PROJECT_KEY:-DEMO}
       Jira__ApiToken: ${JIRA_API_TOKEN:-}
       Jira__Jql: ${JIRA_JQL:-}
@@ -34,8 +35,11 @@ services:
     volumes:
       # сюда кладут файл бизнес-заказчика; разобранные уходят в inbox/processed, проблемные в inbox/failed
       - ./inbox:/inbox
+      # ключи шифрования токена (токен вводится в интерфейсе и хранится в базе зашифрованным)
+      - planner-keys:/keys
     ports:
       - "${PLANNER_PORT:-8085}:8080"
 
 volumes:
   planner-db:
+  planner-keys:

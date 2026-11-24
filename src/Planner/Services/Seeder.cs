@@ -69,6 +69,7 @@ public static class Seeder
                 await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Plans\" ADD COLUMN IF NOT EXISTS \"WaitingOn\" text NULL");
                 await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Plans\" ADD COLUMN IF NOT EXISTS \"ForIntegrators\" boolean NOT NULL DEFAULT false");
                 await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Plans\" ADD COLUMN IF NOT EXISTS \"InCurrent\" boolean NOT NULL DEFAULT false");
+                await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"AppSettings\" (\"Key\" text PRIMARY KEY, \"Value\" text NOT NULL)");
                 await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"People\" ADD COLUMN IF NOT EXISTS \"OverheadHours\" double precision NOT NULL DEFAULT 0");
 
                 if (!await db.People.AnyAsync())

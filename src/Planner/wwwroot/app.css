@@ -164,3 +164,14 @@ body.dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
 .item-row[data-drag="true"]{cursor:grab}
 .btn.export{text-decoration:none;display:inline-flex;align-items:center;background:transparent;color:#fff;border-color:rgba(255,255,255,.5)}
 .btn.export:hover{background:rgba(255,255,255,.12)}
+
+.conn-fields{display:flex;flex-direction:column;gap:12px;max-width:640px}
+.conn-fields label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.conn-fields input{width:100%;text-transform:none;letter-spacing:0;font-size:14px;padding:7px 9px}
+.conn-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.hint.err{color:var(--red)}
+.banner.ok{background:var(--green-soft);border-left:4px solid var(--green);margin-top:14px}
+.banner.warn{margin-top:14px}
+.steps{padding-left:20px;margin:0 0 10px;line-height:1.5;font-size:13px}
+.steps li{margin-bottom:8px}
+.steps a{color:var(--blue)}

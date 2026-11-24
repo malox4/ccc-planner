@@ -11,6 +11,7 @@ public class PlannerDb(DbContextOptions<PlannerDb> options) : DbContext(options)
     public DbSet<BusinessPriority> BusinessPriorities => Set<BusinessPriority>();
     public DbSet<BusinessLink> BusinessLinks => Set<BusinessLink>();
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

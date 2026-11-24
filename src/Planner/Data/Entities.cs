@@ -117,3 +117,10 @@ public class SyncRun
     public int Returned { get; set; }
     public string? Error { get; set; }
 }
+
+/// <summary>Настройки, которые пользователь вводит в интерфейсе (ссылка на доску, email, зашифрованный токен).</summary>
+public class AppSetting
+{
+    [Key] public string Key { get; set; } = "";
+    public string Value { get; set; } = "";
+}

@@ -1,0 +1,148 @@
+@page "/settings"
+@rendermode InteractiveServer
+@inject JiraSettingsService Store
+@inject JiraClient Jira
+@inject AppState State
+
+<PageTitle>Подключение — CCC Planner</PageTitle>
+
+<div class="page-head">
+    <h1>Подключение к Jira</h1>
+    <p class="sub">Укажите ссылку на вашу доску, email и свой API-токен. Токен вводится здесь, а не в коде или файле: он хранится в базе в зашифрованном виде и обратно в интерфейс не показывается. Сервис только читает Jira.</p>
+</div>
+
+<div class="layout">
+    <div class="main">
+        <div class="card form-card">
+            <h2>Доска и учётная запись</h2>
+            <div class="conn-fields">
+                <label>Ссылка на доску Jira
+                    <input type="url" @bind="boardUrl" @bind:event="oninput" placeholder="https://ваша-компания.atlassian.net/jira/software/c/projects/KEY/boards/123" />
+                </label>
+                @if (parsed != null)
+                {
+                    <div class="hint">Адрес Jira: <b>@parsed.BaseUrl</b>@(parsed.ProjectKey != null ? $" · проект {parsed.ProjectKey}" : "")@(parsed.BoardId != null ? $" · доска №{parsed.BoardId}" : " · номер доски в ссылке не найден: возьмём весь проект")</div>
+                }
+                else if (!string.IsNullOrWhiteSpace(boardUrl))
+                {
+                    <div class="hint err">Не похоже на ссылку на доску. Откройте доску в Jira и скопируйте адрес из браузера.</div>
+                }
+
+                <label>Email в Jira
+                    <input type="email" @bind="email" @bind:event="oninput" placeholder="you@company.com" autocomplete="off" />
+                </label>
+
+                <label>API-токен
+                    <input type="password" @bind="token" @bind:event="oninput" autocomplete="new-password"
+                           placeholder="@(TokenPlaceholder)" />
+                </label>
+                <div class="hint">@TokenStatus</div>
+            </div>
+
+            <div class="conn-actions">
+                <button class="btn" @onclick="Check" disabled="@busy">Проверить подключение</button>
+                <button class="btn primary" @onclick="Save" disabled="@busy">Сохранить</button>
+                @if (cfg is { TokenSource: "ui" })
+                {
+                    <button class="btn" @onclick="ClearToken" disabled="@busy">Удалить токен</button>
+                }
+            </div>
+
+            @if (result != null)
+            {
+                <div class="banner @(resultOk ? "ok" : "warn")">@result</div>
+            }
+        </div>
+    </div>
+
+    <aside class="side">
+        <div class="card side-card">
+            <h2>Как получить токен</h2>
+            <ol class="steps">
+                <li>Откройте <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">id.atlassian.com/manage-profile/security/api-tokens</a> и войдите той же учётной записью, под которой работаете в Jira.</li>
+                <li>Нажмите <b>Create API token</b>. Назовите его, например, <b>ccc-planner</b> и выберите срок действия (например, год).</li>
+                <li>Нажмите <b>Create</b>, затем <b>Copy</b>. Токен показывается <b>один раз</b>: если закроете окно, не скопировав, создайте новый.</li>
+                <li>Вставьте токен в поле слева, укажите email (тот же, что в Jira) и ссылку на доску.</li>
+                <li>Нажмите <b>Проверить подключение</b>: сервис покажет, под кем вы вошли и сколько задач на доске. Затем <b>Сохранить</b> и <b>Синхронизировать</b> в верхней панели.</li>
+            </ol>
+            <p class="hint"><b>Правила:</b> токен личный, чужим пользоваться нельзя и передавать его не нужно: у каждого коллеги свой. Права токена равны вашим правам в Jira. Если страницы создания токена нет или она недоступна, токены отключил администратор Jira: обратитесь к нему.</p>
+            <p class="hint"><b>Отозвать:</b> на той же странице Atlassian нажмите Revoke у токена. Здесь токен можно удалить кнопкой «Удалить токен».</p>
+        </div>
+    </aside>
+</div>
+
+@code {
+    string boardUrl = "", email = "", token = "";
+    JiraConfig? cfg;
+    ParsedBoard? parsed => JiraSettingsService.ParseBoardUrl(boardUrl);
+    bool busy, resultOk;
+    string? result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        cfg = await Store.GetAsync();
+        boardUrl = cfg.BoardUrl;
+        email = cfg.Email;
+    }
+
+    string TokenPlaceholder => cfg?.TokenSource switch
+    {
+        "ui" or "env" => "••••••••  (оставьте пустым, чтобы не менять)",
+        _ => "вставьте токен",
+    };
+
+    string TokenStatus => cfg?.TokenSource switch
+    {
+        "ui" => "Токен сохранён (зашифрован). Введите новый, чтобы заменить.",
+        "env" => "Используется токен из файла .env. Введите свой, и он станет главным.",
+        "broken" => "Сохранённый токен не удалось расшифровать (сменились ключи). Введите токен заново.",
+        _ => "Токен не задан.",
+    };
+
+    async Task Check()
+    {
+        busy = true; result = null; StateHasChanged();
+        try
+        {
+            var c = await Store.BuildAsync(boardUrl, email, token);
+            if (!c.IsComplete) { Fail("Заполните ссылку на доску, email и токен."); return; }
+
+            var me = await Jira.MyselfAsync(c, default);
+            var q = await Jira.ResolveQueriesAsync(c, default);
+            var count = await Jira.CountAsync(c, q.Jql, default);
+            Ok($"Подключено: {me.Name}. Выборка задач: {q.Source}" + (count != null ? $", около {count} задач." : "."));
+        }
+        catch (Exception ex) { Fail(ex.Message); }
+        finally { busy = false; }
+    }
+
+    async Task Save()
+    {
+        busy = true; result = null; StateHasChanged();
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(boardUrl) && JiraSettingsService.ParseBoardUrl(boardUrl) == null)
+            { Fail("Ссылка на доску не распознана."); return; }
+            await Store.SaveAsync(boardUrl, email, token, clearToken: false);
+            token = "";
+            cfg = await Store.GetAsync();
+            State.Notify();
+            Ok("Сохранено. Нажмите «Синхронизировать» в верхней панели, чтобы загрузить задачи.");
+        }
+        catch (Exception ex) { Fail(ex.Message); }
+        finally { busy = false; }
+    }
+
+    async Task ClearToken()
+    {
+        busy = true;
+        await Store.SaveAsync(boardUrl, email, null, clearToken: true);
+        cfg = await Store.GetAsync();
+        token = "";
+        Ok("Токен удалён.");
+        busy = false;
+    }
+
+    void Ok(string m) { result = m; resultOk = true; }
+    void Fail(string m) { result = m; resultOk = false; busy = false; }
+}

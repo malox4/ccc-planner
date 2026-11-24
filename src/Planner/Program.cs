@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Planner.Components;
 using Planner.Data;
@@ -11,6 +12,11 @@ builder.Services.Configure<PlannerOptions>(builder.Configuration.GetSection("Pla
 builder.Services.AddDbContextFactory<PlannerDb>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Db")));
 
+// ключи шифрования токена лежат на отдельном томе, чтобы токен переживал перезапуск контейнера
+builder.Services.AddDataProtection()
+    .SetApplicationName("ccc-planner")
+    .PersistKeysToFileSystem(new DirectoryInfo(builder.Configuration["Planner:KeysPath"] ?? "/keys"));
+builder.Services.AddSingleton<JiraSettingsService>();
 builder.Services.AddHttpClient<JiraClient>();
 builder.Services.AddSingleton<AppState>();
 builder.Services.AddScoped<SyncService>();

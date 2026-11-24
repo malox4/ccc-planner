@@ -7,7 +7,7 @@ namespace Planner.Services;
 /// Кнопка «Синхронизировать»: тянет новые задачи и статусы текущих. Задача, которая пропала из выборки Jira,
 /// считается закрытой — в сервисе она остаётся (с датой исчезновения и последним известным статусом).
 /// </summary>
-public class SyncService(IDbContextFactory<PlannerDb> dbf, JiraClient jira, Microsoft.Extensions.Options.IOptions<JiraOptions> opt, AppState state)
+public class SyncService(IDbContextFactory<PlannerDb> dbf, JiraClient jira, JiraSettingsService settings, AppState state)
 {
     static readonly SemaphoreSlim Gate = new(1, 1);
 
@@ -22,16 +22,18 @@ public class SyncService(IDbContextFactory<PlannerDb> dbf, JiraClient jira, Micr
         db.SyncRuns.Add(run);
         try
         {
-            if (!jira.IsConfigured)
-                throw new InvalidOperationException("Jira не настроена: задайте Jira__BaseUrl, Jira__Email и Jira__ApiToken в .env и перезапустите контейнер.");
+            var cfg = await settings.GetAsync();
+            if (!cfg.IsComplete)
+                throw new InvalidOperationException("Jira не подключена: откройте вкладку «Подключение», укажите ссылку на доску, email и токен.");
 
-            var jql = string.IsNullOrWhiteSpace(opt.Value.Jql) ? $"project = {opt.Value.ProjectKey} AND (statusCategory != Done OR sprint in openSprints()) ORDER BY key DESC" : opt.Value.Jql;
-            var sprintJql = string.IsNullOrWhiteSpace(opt.Value.SprintJql) ? $"project = {opt.Value.ProjectKey} AND sprint in openSprints()" : opt.Value.SprintJql;
+            var q = await jira.ResolveQueriesAsync(cfg, ct);
+            var jql = q.Jql;
+            var sprintJql = q.SprintJql;
 
             // клонированные задачи («CLONE …» в заголовке) в планирование не берём
             static bool IsClone(string s) => s.TrimStart().StartsWith("CLONE", StringComparison.OrdinalIgnoreCase);
-            var fetched = (await jira.SearchAsync(jql, ct)).Where(x => !IsClone(x.Summary)).ToList();
-            var inSprint = (await jira.SearchAsync(sprintJql, ct, keysOnly: true)).Select(x => x.Key).ToHashSet();
+            var fetched = (await jira.SearchAsync(cfg, jql, ct)).Where(x => !IsClone(x.Summary)).ToList();
+            var inSprint = (await jira.SearchAsync(cfg, sprintJql, ct, keysOnly: true)).Select(x => x.Key).ToHashSet();
 
             var existing = await db.Issues.ToDictionaryAsync(i => i.Key, ct);
             // защита: пустой ответ при непустой базе — это, скорее всего, сбой, а не «все закрыты»
